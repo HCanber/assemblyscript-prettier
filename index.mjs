@@ -32,22 +32,29 @@ function preProcess(code) {
     let list = [];
     let _visit = (_node) => {
       switch (_node.kind) {
+        case NodeKind.Source:
         case NodeKind.SOURCE: {
           _node.statements.forEach((statement) => {
             _visit(statement);
           });
           break;
         }
+        case NodeKind.ClassDeclaration:
         case NodeKind.CLASSDECLARATION:
+        case NodeKind.InterfaceDeclaration:
         case NodeKind.INTERFACEDECLARATION:
+        case NodeKind.NamespaceDeclaration:
         case NodeKind.NAMESPACEDECLARATION: {
           _node.members.forEach((statement) => {
             _visit(statement);
           });
           break;
         }
+        case NodeKind.EnumDeclaration:
         case NodeKind.ENUMDECLARATION:
+        case NodeKind.MethodDeclaration:
         case NodeKind.METHODDECLARATION:
+        case NodeKind.FunctionDeclaration:
         case NodeKind.FUNCTIONDECLARATION: {
           if (_node.decorators) {
             list.push(
