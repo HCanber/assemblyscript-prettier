@@ -139,14 +139,15 @@ program
   .argument("<input-file>", "format file")
   .option("-c, --check", "Check if the given files are formatted")
   .option("-w, --write", "Edit files in-place. (Beware!)")
+  .option("--ignore-path <path>", "Path to a file with patterns describing files to ignore.", ".asprettierignore")
   .action(async (input, opts) => {
     if (fs.existsSync(input) && fs.statSync(input).isDirectory()) {
       input += "/**/*.ts";
     }
     const files = FastGlob.sync(input, { dot: true });
     const ig = ignore().add("node_modules");
-    if (fs.existsSync(".asprettierignore")) {
-      ig.add(fs.readFileSync(".asprettierignore", { encoding: "utf8" }));
+    if (opts.ignorePath && fs.existsSync(opts.ignorePath)) {
+      ig.add(fs.readFileSync(opts.ignorePath, { encoding: "utf8" }));
     }
     const filterFiles = ig.filter(files).filter((v) => v.endsWith(".ts"));
     const b1 = new SingleBar({
