@@ -188,10 +188,19 @@ program
       );
       b1.stop();
     } else {
-      filterFiles.forEach(async (file) => {
-        let code = await format(file);
-        log(code);
-      });
+      for (const file of filterFiles) {
+        try {
+          let code = await format(file);
+          // Write using process.stdout.write to avoid adding an extra newline
+          // at the end
+          process.stdout.write(code);
+        } catch (err) {
+          // Write without using any formatting as the error message
+          // likely already contains formatting
+          console.error(file, "\n", err.toString());
+          exit(1);
+        }
+      }
     }
   });
 
