@@ -137,8 +137,8 @@ const warning = (...args) => {
   console.log(chalk.bold.yellowBright(...args));
 };
 
-const program = new Command();
-program
+const cmd = new Command();
+cmd
   .argument("<input-file>", "format file")
   .option("-c, --check", "Check if the given files are formatted")
   .option("-w, --write", "Edit files in-place. (Beware!)")
@@ -209,7 +209,7 @@ program
   });
 
 try {
-  program.parse(process.argv);
+  cmd.parse(process.argv);
 } catch (e) {
   error(`${e}`);
 }
