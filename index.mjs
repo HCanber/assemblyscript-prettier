@@ -68,6 +68,9 @@ function preProcess(code) {
           }
           break;
         }
+        default: {
+          error('Unknown node kind "' + _node.kind + '".');
+        }
       }
     };
     _visit(node);
