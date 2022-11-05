@@ -130,7 +130,7 @@ const success = (...args) => {
   console.log(chalk.bold.greenBright(...args));
 };
 const error = (...args) => {
-  console.log(chalk.bold.redBright(...args));
+  console.error(chalk.bold.redBright(...args));
   exit(-1);
 };
 const warning = (...args) => {
