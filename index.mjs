@@ -113,8 +113,8 @@ async function format(path) {
   const tsCode = preProcess(code);
   let config = await resolveConfig(path, opts);
   const formatTsCode = prettier.format(tsCode, config);
-  const foramtCode = postProcess(formatTsCode);
-  return foramtCode;
+  const formattedCode = postProcess(formatTsCode);
+  return formattedCode;
 }
 async function check(path) {
   const code = await readFile(path, { encoding: "utf8" });
