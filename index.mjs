@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import * as fs from "node:fs";
+import * as Path from "node:path";
 import { exit } from "node:process";
 import assemblyscript from "assemblyscript";
 import prettier from "prettier";
@@ -9,12 +10,20 @@ import FastGlob from "fast-glob";
 import chalk from "chalk";
 import ignore from "ignore";
 import { SingleBar } from "cli-progress";
+import getStdin from "get-stdin";
 
 const readFile = fs.promises.readFile;
 const writeFile = fs.promises.writeFile;
 
 const prefix = "/*MAGIC_CODE_ASSEMBLYSCRIPT_PRETTIER";
 const postfix = "MAGIC_CODE_ASSEMBLYSCRIPT_PRETTIER*/";
+
+const stdinFilePathArgument = "stdin-filepath";
+
+const isWindows = Path.sep === "\\";
+function fixWindowsSlashes(pattern) {
+  return isWindows ? pattern.replace(/\\/g, "/") : pattern;
+}
 
 function preProcess(code) {
   let program = assemblyscript.newProgram(assemblyscript.newOptions());
@@ -99,27 +108,32 @@ function postProcess(code) {
 }
 async function resolveConfig(path, opts) {
   let config = (await prettier.resolveConfig(path, { config: opts.config })) || {};
+  config.filepath = path;
   config.parser = "typescript";
   return config;
 }
-
 /**
  *
  * @param {string} path
  * @returns {Promise<string>}
  */
-async function format(path) {
+async function formatFile(path, opts) {
   const code = await readFile(path, { encoding: "utf8" });
+  return await formatCode(code, path, opts);
+}
+
+async function formatCode(code, path, opts) {
   const tsCode = preProcess(code);
   let config = await resolveConfig(path, opts);
   const formatTsCode = prettier.format(tsCode, config);
   const formattedCode = postProcess(formatTsCode);
   return formattedCode;
 }
-async function check(path) {
+
+async function check(path, opts) {
   const code = await readFile(path, { encoding: "utf8" });
   const tsCode = preProcess(code);
-  let config = await resolveConfig(path);
+  let config = await resolveConfig(path, opts);
   return prettier.check(tsCode, config);
 }
 
@@ -137,12 +151,11 @@ const warning = (...args) => {
   console.log(chalk.bold.yellowBright(...args));
 };
 
-async function processPath(inputPath, opts) {
+async function processPath(inputPath, ig, opts) {
   if (fs.existsSync(inputPath) && fs.statSync(inputPath).isDirectory()) {
     inputPath += "/**/*.ts";
   }
   const files = FastGlob.sync(inputPath, { dot: true });
-  const ig = ignore({ allowRelativePaths: true }).add("node_modules");
   if (opts.ignorePath && fs.existsSync(opts.ignorePath)) {
     ig.add(fs.readFileSync(opts.ignorePath, { encoding: "utf8" }));
   }
@@ -159,8 +172,7 @@ async function processPath(inputPath, opts) {
     b1.start(filterFiles.length, 0, { file: "N/A" });
     await Promise.all(
       filterFiles.map(async (file) => {
-        let checkResult;
-        checkResult = await check(file);
+        const checkResult = await check(file, opts);
         if (!checkResult) {
           failedFiles.push(file);
         }
@@ -179,7 +191,7 @@ async function processPath(inputPath, opts) {
     b1.start(filterFiles.length, 0, { file: "N/A" });
     await Promise.all(
       filterFiles.map(async (file) => {
-        let code = await format(file);
+        let code = await formatFile(file, opts);
         await writeFile(file, code);
         b1.increment({ file });
       })
@@ -188,7 +200,7 @@ async function processPath(inputPath, opts) {
   } else {
     for (const file of filterFiles) {
       try {
-        let code = await format(file);
+        let code = await formatFile(file, opts);
         // Write using process.stdout.write to avoid adding an extra newline
         // at the end
         process.stdout.write(code);
@@ -202,15 +214,63 @@ async function processPath(inputPath, opts) {
   }
 }
 
+async function processStdin(ig, opts) {
+  if (!opts.stdinFilepath) {
+    error(`--${stdinFilePathArgument} must be specified when pipeing to stdin`);
+  }
+  const cwd = process.cwd();
+  const filepath = Path.resolve(cwd, opts.stdinFilepath);
+  const hasIgnoreFile = opts.ignorePath && fs.existsSync(opts.ignorePath);
+
+  // If there's an ignore-path set, the filename must be relative to the
+  // ignore path, not the current working directory.
+  const relativeFilepath = hasIgnoreFile
+    ? Path.relative(Path.dirname(opts.ignorePath), filepath)
+    : Path.relative(cwd, filepath);
+
+  let input = await getStdin();
+  if (relativeFilepath && ig.ignores(fixWindowsSlashes(relativeFilepath))) {
+    // Write using process.stdout.write to av oid adding an extra newline at the end
+    process.stdout.write(input);
+    return;
+  }
+  try {
+    let code = await formatCode(input, filepath, opts);
+    // Write using process.stdout.write to avoid adding an extra newline at the end
+    process.stdout.write(code);
+  } catch (err) {
+    // Write without using any formatting as the error message
+    // likely already contains formatting
+    console.error(filepath, "\n", err);
+    exit(1);
+  }
+}
+
 const cmd = new Command();
 cmd
-  .argument("<input-file>", "format file")
+  .argument("[input-file]", "format file")
   .option("-c, --check", "Check if the given files are formatted")
   .option("-w, --write", "Edit files in-place. (Beware!)")
   .option("--config <path>", "Path to a Prettier configuration file (.prettierrc, package.json, prettier.config.js).")
   .option("--ignore-path <path>", "Path to a file with patterns describing files to ignore.", ".asprettierignore")
+  .option(
+    `--${stdinFilePathArgument} <path>`,
+    "Path to the file to pretend that stdin comes from. Must be set when stdin is used"
+  )
+  .addHelpText(
+    "after",
+    "\nBy default, output is written to stdout.\nStdin is read if it is piped to as-prettier and no files are given."
+  )
   .action(async (inputPath, opts) => {
-    await processPath(inputPath, opts);
+    const hasInputFileDefined = inputPath?.length > 0;
+    const useStdin = !hasInputFileDefined && (!process.stdin.isTTY || opts.stdinFilepath);
+    const ig = ignore({ allowRelativePaths: true }).add("node_modules");
+
+    if (useStdin) {
+      await processStdin(ig, opts);
+      return;
+    }
+    await processPath(inputPath, ig, opts);
   });
 
 try {
