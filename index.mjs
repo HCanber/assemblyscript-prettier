@@ -78,7 +78,7 @@ function preProcess(code) {
           break;
         }
         default: {
-          error('Unknown node kind "' + _node.kind + '".');
+          errorAndExit('Unknown node kind "' + _node.kind + '".');
         }
       }
     };
@@ -137,18 +137,24 @@ async function check(path, opts) {
   return prettier.check(tsCode, config);
 }
 
+const formatError = (err) => (err.name === "SyntaxError" ? err.message : err.stack);
+const formatLogArgs = (args) => args.map((a) => (a instanceof Error ? formatError(a) : a));
+
 const log = (...args) => {
-  console.log(...args);
+  console.log(...formatLogArgs(args));
 };
+
 const success = (...args) => {
-  console.log(chalk.bold.greenBright(...args));
+  console.log(chalk.bold.greenBright(...formatLogArgs(args)));
 };
-const error = (...args) => {
-  console.error(chalk.bold.redBright(...args));
+
+const errorAndExit = (...args) => {
+  console.error(chalk.bold.redBright(...formatLogArgs(args)));
   exit(-1);
 };
+
 const warning = (...args) => {
-  console.log(chalk.bold.yellowBright(...args));
+  console.log(chalk.bold.yellowBright(...formatLogArgs(args)));
 };
 
 async function processPath(inputPath, ig, opts) {
@@ -172,11 +178,15 @@ async function processPath(inputPath, ig, opts) {
     b1.start(filterFiles.length, 0, { file: "N/A" });
     await Promise.all(
       filterFiles.map(async (file) => {
-        const checkResult = await check(file, opts);
-        if (!checkResult) {
-          failedFiles.push(file);
+        try {
+          const checkResult = await check(file, opts);
+          if (!checkResult) {
+            failedFiles.push(file);
+          }
+          b1.increment({ file });
+        } catch (err) {
+          errorAndExit("\n", err);
         }
-        b1.increment({ file });
       })
     );
     b1.stop();
@@ -189,14 +199,25 @@ async function processPath(inputPath, ig, opts) {
     }
   } else if (opts.write) {
     b1.start(filterFiles.length, 0, { file: "N/A" });
-    await Promise.all(
+    const results = await Promise.all(
       filterFiles.map(async (file) => {
-        let code = await formatFile(file, opts);
-        await writeFile(file, code);
-        b1.increment({ file });
+        try {
+          let code = await formatFile(file, opts);
+          await writeFile(file, code);
+          b1.increment({ file });
+          return true;
+        } catch (err) {
+          // Write without using any formatting as the error message
+          // likely already contains formatting
+          console.error(`\nERROR [${file}]\n`, formatError(err));
+          return false;
+        }
       })
     );
     b1.stop();
+    if (!results.reduce((b, c) => b && c, true)) {
+      exit(1);
+    }
   } else {
     for (const file of filterFiles) {
       try {
@@ -207,7 +228,7 @@ async function processPath(inputPath, ig, opts) {
       } catch (err) {
         // Write without using any formatting as the error message
         // likely already contains formatting
-        console.error(file, "\n", err.toString());
+        console.error(`ERROR in [${file}]\n`, formatError(err));
         exit(1);
       }
     }
@@ -216,7 +237,7 @@ async function processPath(inputPath, ig, opts) {
 
 async function processStdin(ig, opts) {
   if (!opts.stdinFilepath) {
-    error(`--${stdinFilePathArgument} must be specified when pipeing to stdin`);
+    errorAndExit(`--${stdinFilePathArgument} must be specified when pipeing to stdin`);
   }
   const cwd = process.cwd();
   const filepath = Path.resolve(cwd, opts.stdinFilepath);
@@ -241,7 +262,7 @@ async function processStdin(ig, opts) {
   } catch (err) {
     // Write without using any formatting as the error message
     // likely already contains formatting
-    console.error(filepath, "\n", err);
+    console.error(`ERROR in [${filepath}]\n`, formatError(err));
     exit(1);
   }
 }
@@ -275,6 +296,6 @@ cmd
 
 try {
   await cmd.parseAsync(process.argv);
-} catch (e) {
-  error(`${e}`);
+} catch (err) {
+  errorAndExit(err);
 }
