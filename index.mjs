@@ -137,6 +137,71 @@ const warning = (...args) => {
   console.log(chalk.bold.yellowBright(...args));
 };
 
+async function processPath(inputPath, opts) {
+  if (fs.existsSync(inputPath) && fs.statSync(inputPath).isDirectory()) {
+    inputPath += "/**/*.ts";
+  }
+  const files = FastGlob.sync(inputPath, { dot: true });
+  const ig = ignore().add("node_modules");
+  if (opts.ignorePath && fs.existsSync(opts.ignorePath)) {
+    ig.add(fs.readFileSync(opts.ignorePath, { encoding: "utf8" }));
+  }
+  const filterFiles = ig.filter(files).filter((v) => v.endsWith(".ts"));
+  const b1 = new SingleBar({
+    format: chalk.cyan("{bar}") + "| {percentage}% || {value}/{total} Files || formatting '{file}'",
+    barCompleteChar: "\u2588",
+    barIncompleteChar: "\u2591",
+    hideCursor: true,
+  });
+
+  if (opts.check) {
+    let failedFiles = [];
+    b1.start(filterFiles.length, 0, { file: "N/A" });
+    await Promise.all(
+      filterFiles.map(async (file) => {
+        let checkResult;
+        checkResult = await check(file);
+        if (!checkResult) {
+          failedFiles.push(file);
+        }
+        b1.increment({ file });
+      })
+    );
+    b1.stop();
+    if (failedFiles.length > 0) {
+      warning("Code style issues found in following files. Forgot to run Prettier?");
+      log(`${failedFiles.map((v) => `- '${v}'`).join("\n")}`);
+      exit(-1);
+    } else {
+      success("Perfect code style!");
+    }
+  } else if (opts.write) {
+    b1.start(filterFiles.length, 0, { file: "N/A" });
+    await Promise.all(
+      filterFiles.map(async (file) => {
+        let code = await format(file);
+        await writeFile(file, code);
+        b1.increment({ file });
+      })
+    );
+    b1.stop();
+  } else {
+    for (const file of filterFiles) {
+      try {
+        let code = await format(file);
+        // Write using process.stdout.write to avoid adding an extra newline
+        // at the end
+        process.stdout.write(code);
+      } catch (err) {
+        // Write without using any formatting as the error message
+        // likely already contains formatting
+        console.error(file, "\n", err.toString());
+        exit(1);
+      }
+    }
+  }
+}
+
 const cmd = new Command();
 cmd
   .argument("<input-file>", "format file")
@@ -144,68 +209,7 @@ cmd
   .option("-w, --write", "Edit files in-place. (Beware!)")
   .option("--ignore-path <path>", "Path to a file with patterns describing files to ignore.", ".asprettierignore")
   .action(async (inputPath, opts) => {
-    if (fs.existsSync(inputPath) && fs.statSync(inputPath).isDirectory()) {
-      inputPath += "/**/*.ts";
-    }
-    const files = FastGlob.sync(inputPath, { dot: true });
-    const ig = ignore().add("node_modules");
-    if (opts.ignorePath && fs.existsSync(opts.ignorePath)) {
-      ig.add(fs.readFileSync(opts.ignorePath, { encoding: "utf8" }));
-    }
-    const filterFiles = ig.filter(files).filter((v) => v.endsWith(".ts"));
-    const b1 = new SingleBar({
-      format: chalk.cyan("{bar}") + "| {percentage}% || {value}/{total} Files || formatting '{file}'",
-      barCompleteChar: "\u2588",
-      barIncompleteChar: "\u2591",
-      hideCursor: true,
-    });
-
-    if (opts.check) {
-      let failedFiles = [];
-      b1.start(filterFiles.length, 0, { file: "N/A" });
-      await Promise.all(
-        filterFiles.map(async (file) => {
-          let checkResult;
-          checkResult = await check(file);
-          if (!checkResult) {
-            failedFiles.push(file);
-          }
-          b1.increment({ file });
-        })
-      );
-      b1.stop();
-      if (failedFiles.length > 0) {
-        warning("Code style issues found in following files. Forgot to run Prettier?");
-        log(`${failedFiles.map((v) => `- '${v}'`).join("\n")}`);
-        exit(-1);
-      } else {
-        success("Perfect code style!");
-      }
-    } else if (opts.write) {
-      b1.start(filterFiles.length, 0, { file: "N/A" });
-      await Promise.all(
-        filterFiles.map(async (file) => {
-          let code = await format(file);
-          await writeFile(file, code);
-          b1.increment({ file });
-        })
-      );
-      b1.stop();
-    } else {
-      for (const file of filterFiles) {
-        try {
-          let code = await format(file);
-          // Write using process.stdout.write to avoid adding an extra newline
-          // at the end
-          process.stdout.write(code);
-        } catch (err) {
-          // Write without using any formatting as the error message
-          // likely already contains formatting
-          console.error(file, "\n", err.toString());
-          exit(1);
-        }
-      }
-    }
+    await processPath(inputPath, opts);
   });
 
 try {
