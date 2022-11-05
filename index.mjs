@@ -213,7 +213,7 @@ cmd
   });
 
 try {
-  cmd.parse(process.argv);
+  await cmd.parseAsync(process.argv);
 } catch (e) {
   error(`${e}`);
 }
