@@ -97,8 +97,8 @@ function preProcess(code) {
 function postProcess(code) {
   return code.split(prefix).join("").split(postfix).join("");
 }
-async function resolveConfig(path) {
-  let config = (await prettier.resolveConfig(path)) || {};
+async function resolveConfig(path, opts) {
+  let config = (await prettier.resolveConfig(path, { config: opts.config })) || {};
   config.parser = "typescript";
   return config;
 }
@@ -111,7 +111,7 @@ async function resolveConfig(path) {
 async function format(path) {
   const code = await readFile(path, { encoding: "utf8" });
   const tsCode = preProcess(code);
-  let config = await resolveConfig(path);
+  let config = await resolveConfig(path, opts);
   const formatTsCode = prettier.format(tsCode, config);
   const foramtCode = postProcess(formatTsCode);
   return foramtCode;
@@ -207,6 +207,7 @@ cmd
   .argument("<input-file>", "format file")
   .option("-c, --check", "Check if the given files are formatted")
   .option("-w, --write", "Edit files in-place. (Beware!)")
+  .option("--config <path>", "Path to a Prettier configuration file (.prettierrc, package.json, prettier.config.js).")
   .option("--ignore-path <path>", "Path to a file with patterns describing files to ignore.", ".asprettierignore")
   .action(async (inputPath, opts) => {
     await processPath(inputPath, opts);
