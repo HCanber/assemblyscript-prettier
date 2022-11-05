@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
+import * as fs from "node:fs";
+import { exit } from "node:process";
 import assemblyscript from "assemblyscript";
 import prettier from "prettier";
-import * as fs from "fs";
 import { Command } from "commander";
 import FastGlob from "fast-glob";
-import { exit } from "process";
 import chalk from "chalk";
 import ignore from "ignore";
 import { SingleBar } from "cli-progress";
