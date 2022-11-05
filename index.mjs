@@ -142,7 +142,7 @@ async function processPath(inputPath, opts) {
     inputPath += "/**/*.ts";
   }
   const files = FastGlob.sync(inputPath, { dot: true });
-  const ig = ignore().add("node_modules");
+  const ig = ignore({ allowRelativePaths: true }).add("node_modules");
   if (opts.ignorePath && fs.existsSync(opts.ignorePath)) {
     ig.add(fs.readFileSync(opts.ignorePath, { encoding: "utf8" }));
   }
