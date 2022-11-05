@@ -34,22 +34,33 @@ const warning = (...args) => {
   console.log(chalk.bold.yellowBright(...formatLogArgs(args)));
 };
 
+const noop = () => {};
+
 async function processPath(inputPath, { config, ignorePath, ignore, cwd, opts }) {
   if (fs.existsSync(inputPath) && fs.statSync(inputPath).isDirectory()) {
     inputPath += "/**/*.ts";
   }
   const filterFiles = ignore.filter(files).filter((v) => v.endsWith(".ts"));
-  const b1 = new SingleBar({
-    format: chalk.cyan("{bar}") + "| {percentage}% || {value}/{total} Files || formatting '{file}'",
-    barCompleteChar: "\u2588",
-    barIncompleteChar: "\u2591",
-    hideCursor: true,
-    clearOnComplete: true,
-  });
+
+  // Only use progress bar if there is more than 1 file
+  const progressBar =
+    filterFiles.length === 1
+      ? {
+          start: noop,
+          stop: noop,
+          increment: noop,
+        }
+      : new SingleBar({
+          format: chalk.cyan("{bar}") + "| {percentage}% || {value}/{total} Files || formatting '{file}'",
+          barCompleteChar: "\u2588",
+          barIncompleteChar: "\u2591",
+          hideCursor: true,
+          clearOnComplete: true,
+        });
 
   if (opts.check) {
     let failedFiles = [];
-    b1.start(filterFiles.length, 0, { file: "N/A" });
+    progressBar.start(filterFiles.length, 0, { file: "N/A" });
     await Promise.all(
       filterFiles.map(async (file) => {
         try {
@@ -57,13 +68,13 @@ async function processPath(inputPath, { config, ignorePath, ignore, cwd, opts })
           if (!checkResult) {
             failedFiles.push(file);
           }
-          b1.increment({ file });
+          progressBar.increment({ file });
         } catch (err) {
           errorAndExit("\n", err);
         }
       })
     );
-    b1.stop();
+    progressBar.stop();
     if (failedFiles.length > 0) {
       warning("Code style issues found in following files. Forgot to run as-prettier?");
       log(`${failedFiles.map((v) => `- '${v}'`).join("\n")}`);
@@ -72,13 +83,13 @@ async function processPath(inputPath, { config, ignorePath, ignore, cwd, opts })
       success("Perfect code style! Checked", filterFiles.length, filterFiles.length === 1 ? "file" : "files");
     }
   } else if (opts.write) {
-    b1.start(filterFiles.length, 0, { file: "N/A" });
+    progressBar.start(filterFiles.length, 0, { file: "N/A" });
     const results = await Promise.all(
       filterFiles.map(async (file) => {
         try {
           let code = await formatFile(file, { config, ignorePath, ignore, cwd });
           await writeFile(file, code);
-          b1.increment({ file });
+          progressBar.increment({ file });
           return true;
         } catch (err) {
           // Write without using any formatting as the error message
@@ -88,7 +99,7 @@ async function processPath(inputPath, { config, ignorePath, ignore, cwd, opts })
         }
       })
     );
-    b1.stop();
+    progressBar.stop();
     if (!results.reduce((b, c) => b && c, true)) {
       exit(1);
     } else {
