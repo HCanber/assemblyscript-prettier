@@ -143,11 +143,11 @@ cmd
   .option("-c, --check", "Check if the given files are formatted")
   .option("-w, --write", "Edit files in-place. (Beware!)")
   .option("--ignore-path <path>", "Path to a file with patterns describing files to ignore.", ".asprettierignore")
-  .action(async (input, opts) => {
-    if (fs.existsSync(input) && fs.statSync(input).isDirectory()) {
-      input += "/**/*.ts";
+  .action(async (inputPath, opts) => {
+    if (fs.existsSync(inputPath) && fs.statSync(inputPath).isDirectory()) {
+      inputPath += "/**/*.ts";
     }
-    const files = FastGlob.sync(input, { dot: true });
+    const files = FastGlob.sync(inputPath, { dot: true });
     const ig = ignore().add("node_modules");
     if (opts.ignorePath && fs.existsSync(opts.ignorePath)) {
       ig.add(fs.readFileSync(opts.ignorePath, { encoding: "utf8" }));
