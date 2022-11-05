@@ -1,141 +1,18 @@
 #!/usr/bin/env node
 
 import * as fs from "node:fs";
-import * as Path from "node:path";
 import { exit } from "node:process";
-import assemblyscript from "assemblyscript";
-import prettier from "prettier";
 import { Command } from "commander";
 import FastGlob from "fast-glob";
 import chalk from "chalk";
-import ignore from "ignore";
+import { createIgnore } from "./lib/ignore.mjs";
 import { SingleBar } from "cli-progress";
-import getStdin from "get-stdin";
+import { formatFile, checkFile } from "./lib/formatFile.mjs";
+import { format } from "./lib/format.mjs";
 
-const readFile = fs.promises.readFile;
 const writeFile = fs.promises.writeFile;
 
-const prefix = "/*MAGIC_CODE_ASSEMBLYSCRIPT_PRETTIER";
-const postfix = "MAGIC_CODE_ASSEMBLYSCRIPT_PRETTIER*/";
-
 const stdinFilePathArgument = "stdin-filepath";
-
-const isWindows = Path.sep === "\\";
-function fixWindowsSlashes(pattern) {
-  return isWindows ? pattern.replace(/\\/g, "/") : pattern;
-}
-
-function preProcess(code) {
-  let program = assemblyscript.newProgram(assemblyscript.newOptions());
-  try {
-    assemblyscript.parse(program, code, "test.ts");
-  } catch (e) {
-    //not assemblyscript ts file
-    return;
-  }
-  let source = program.sources[0];
-
-  let NodeKind = assemblyscript.NodeKind;
-
-  function visitDecorators(node) {
-    let list = [];
-    let _visit = (_node) => {
-      switch (_node.kind) {
-        case NodeKind.Source:
-        case NodeKind.SOURCE: {
-          _node.statements.forEach((statement) => {
-            _visit(statement);
-          });
-          break;
-        }
-        case NodeKind.ClassDeclaration:
-        case NodeKind.CLASSDECLARATION:
-        case NodeKind.InterfaceDeclaration:
-        case NodeKind.INTERFACEDECLARATION:
-        case NodeKind.NamespaceDeclaration:
-        case NodeKind.NAMESPACEDECLARATION: {
-          _node.members.forEach((statement) => {
-            _visit(statement);
-          });
-          break;
-        }
-        case NodeKind.EnumDeclaration:
-        case NodeKind.ENUMDECLARATION:
-        case NodeKind.MethodDeclaration:
-        case NodeKind.METHODDECLARATION:
-        case NodeKind.FunctionDeclaration:
-        case NodeKind.FUNCTIONDECLARATION: {
-          if (_node.decorators) {
-            list.push(
-              ..._node.decorators.map((decorator) => {
-                return {
-                  start: decorator.range.start,
-                  end: decorator.range.end,
-                };
-              })
-            );
-          }
-          break;
-        }
-        default: {
-          errorAndExit('Unknown node kind "' + _node.kind + '".');
-        }
-      }
-    };
-    _visit(node);
-    return list;
-  }
-
-  const decorators = visitDecorators(source);
-  decorators.sort((a, b) => a.start - b.start);
-  let cursor = 0;
-  const removeDecoratorCodes = decorators.map((decorator) => {
-    let s1 = code.slice(cursor, decorator.start);
-    let s2 = code.slice(decorator.start, decorator.end);
-    cursor = decorator.end;
-    return `${s1}${prefix}${s2}`;
-  });
-  removeDecoratorCodes.push(code.slice(cursor));
-  return removeDecoratorCodes.join(postfix);
-}
-/**
- *
- * @param {string} code
- * @returns {string}
- */
-function postProcess(code) {
-  return code.split(prefix).join("").split(postfix).join("");
-}
-async function resolveConfig(path, opts) {
-  let config = (await prettier.resolveConfig(path, { config: opts.config })) || {};
-  config.filepath = path;
-  config.parser = "typescript";
-  return config;
-}
-/**
- *
- * @param {string} path
- * @returns {Promise<string>}
- */
-async function formatFile(path, opts) {
-  const code = await readFile(path, { encoding: "utf8" });
-  return await formatCode(code, path, opts);
-}
-
-async function formatCode(code, path, opts) {
-  const tsCode = preProcess(code);
-  let config = await resolveConfig(path, opts);
-  const formatTsCode = prettier.format(tsCode, config);
-  const formattedCode = postProcess(formatTsCode);
-  return formattedCode;
-}
-
-async function check(path, opts) {
-  const code = await readFile(path, { encoding: "utf8" });
-  const tsCode = preProcess(code);
-  let config = await resolveConfig(path, opts);
-  return prettier.check(tsCode, config);
-}
 
 const formatError = (err) => (err.name === "SyntaxError" ? err.message : err.stack);
 const formatLogArgs = (args) => args.map((a) => (a instanceof Error ? formatError(a) : a));
@@ -157,20 +34,17 @@ const warning = (...args) => {
   console.log(chalk.bold.yellowBright(...formatLogArgs(args)));
 };
 
-async function processPath(inputPath, ig, opts) {
+async function processPath(inputPath, { config, ignorePath, ignore, cwd, opts }) {
   if (fs.existsSync(inputPath) && fs.statSync(inputPath).isDirectory()) {
     inputPath += "/**/*.ts";
   }
-  const files = FastGlob.sync(inputPath, { dot: true });
-  if (opts.ignorePath && fs.existsSync(opts.ignorePath)) {
-    ig.add(fs.readFileSync(opts.ignorePath, { encoding: "utf8" }));
-  }
-  const filterFiles = ig.filter(files).filter((v) => v.endsWith(".ts"));
+  const filterFiles = ignore.filter(files).filter((v) => v.endsWith(".ts"));
   const b1 = new SingleBar({
     format: chalk.cyan("{bar}") + "| {percentage}% || {value}/{total} Files || formatting '{file}'",
     barCompleteChar: "\u2588",
     barIncompleteChar: "\u2591",
     hideCursor: true,
+    clearOnComplete: true,
   });
 
   if (opts.check) {
@@ -179,7 +53,7 @@ async function processPath(inputPath, ig, opts) {
     await Promise.all(
       filterFiles.map(async (file) => {
         try {
-          const checkResult = await check(file, opts);
+          const checkResult = await checkFile(file, { config, ignorePath, ignore, cwd });
           if (!checkResult) {
             failedFiles.push(file);
           }
@@ -191,18 +65,18 @@ async function processPath(inputPath, ig, opts) {
     );
     b1.stop();
     if (failedFiles.length > 0) {
-      warning("Code style issues found in following files. Forgot to run Prettier?");
+      warning("Code style issues found in following files. Forgot to run as-prettier?");
       log(`${failedFiles.map((v) => `- '${v}'`).join("\n")}`);
       exit(-1);
     } else {
-      success("Perfect code style!");
+      success("Perfect code style! Checked", filterFiles.length, filterFiles.length === 1 ? "file" : "files");
     }
   } else if (opts.write) {
     b1.start(filterFiles.length, 0, { file: "N/A" });
     const results = await Promise.all(
       filterFiles.map(async (file) => {
         try {
-          let code = await formatFile(file, opts);
+          let code = await formatFile(file, { config, ignorePath, ignore, cwd });
           await writeFile(file, code);
           b1.increment({ file });
           return true;
@@ -217,11 +91,13 @@ async function processPath(inputPath, ig, opts) {
     b1.stop();
     if (!results.reduce((b, c) => b && c, true)) {
       exit(1);
+    } else {
+      success("Formatted", filterFiles.length, filterFiles.length === 1 ? "file" : "files");
     }
   } else {
     for (const file of filterFiles) {
       try {
-        let code = await formatFile(file, opts);
+        let code = await formatFile(file, { config, ignorePath, ignore, cwd });
         // Write using process.stdout.write to avoid adding an extra newline
         // at the end
         process.stdout.write(code);
@@ -235,34 +111,22 @@ async function processPath(inputPath, ig, opts) {
   }
 }
 
-async function processStdin(ig, opts) {
-  if (!opts.stdinFilepath) {
-    errorAndExit(`--${stdinFilePathArgument} must be specified when pipeing to stdin`);
-  }
-  const cwd = process.cwd();
-  const filepath = Path.resolve(cwd, opts.stdinFilepath);
-  const hasIgnoreFile = opts.ignorePath && fs.existsSync(opts.ignorePath);
-
-  // If there's an ignore-path set, the filename must be relative to the
-  // ignore path, not the current working directory.
-  const relativeFilepath = hasIgnoreFile
-    ? Path.relative(Path.dirname(opts.ignorePath), filepath)
-    : Path.relative(cwd, filepath);
-
-  let input = await getStdin();
-  if (relativeFilepath && ig.ignores(fixWindowsSlashes(relativeFilepath))) {
-    // Write using process.stdout.write to av oid adding an extra newline at the end
-    process.stdout.write(input);
-    return;
-  }
+async function processStdIn(path, { config, ignorePath, ignore }) {
   try {
-    let code = await formatCode(input, filepath, opts);
+    const { default: getStdin } = await import("get-stdin");
+    const input = await getStdin();
+    const formattedCode = await format(input, path, {
+      config,
+      ignorePath,
+      ignore,
+    });
     // Write using process.stdout.write to avoid adding an extra newline at the end
-    process.stdout.write(code);
+    process.stdout.write(formattedCode);
+    return;
   } catch (err) {
     // Write without using any formatting as the error message
     // likely already contains formatting
-    console.error(`ERROR in [${filepath}]\n`, formatError(err));
+    console.error(`ERROR in [${path}]\n`, formatError(err));
     exit(1);
   }
 }
@@ -283,15 +147,27 @@ cmd
     "\nBy default, output is written to stdout.\nStdin is read if it is piped to as-prettier and no files are given."
   )
   .action(async (inputPath, opts) => {
+    const config = opts.config;
     const hasInputFileDefined = inputPath?.length > 0;
     const useStdin = !hasInputFileDefined && (!process.stdin.isTTY || opts.stdinFilepath);
-    const ig = ignore({ allowRelativePaths: true }).add("node_modules");
+
+    const { ignore, hasIgnoreFile } = await createIgnore(opts.ignorePath);
+    const ignorePath = hasIgnoreFile ? opts.ignorePath : undefined;
 
     if (useStdin) {
-      await processStdin(ig, opts);
-      return;
+      const stdinFilepath = opts.stdinFilepath;
+      if (!stdinFilepath) {
+        errorAndExit(`--${stdinFilePathArgument} must be specified when pipeing to stdin`);
+      }
+      await processStdIn(stdinFilepath, { config, ignorePath, ignore });
+    } else {
+      await processPath(inputPath, {
+        config,
+        ignorePath,
+        ignore,
+        opts,
+      });
     }
-    await processPath(inputPath, ig, opts);
   });
 
 try {
