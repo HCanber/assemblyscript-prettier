@@ -36,10 +36,11 @@ const warning = (...args) => {
 
 const noop = () => {};
 
-async function processPath(inputPath, { config, ignorePath, ignore, cwd, opts }) {
+async function processPath(inputPath = ".", { config, ignorePath, ignore, cwd = process.cwd(), opts }) {
   if (fs.existsSync(inputPath) && fs.statSync(inputPath).isDirectory()) {
     inputPath += "/**/*.ts";
   }
+  const files = FastGlob.sync(inputPath, { dot: true });
   const filterFiles = ignore.filter(files).filter((v) => v.endsWith(".ts"));
 
   // Only use progress bar if there is more than 1 file
